@@ -1,0 +1,9 @@
+[package]
+name = "rsrl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pollster = "1"
+wgpu = "30"
+winit = "0.30"
