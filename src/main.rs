@@ -1,19 +1,20 @@
-//! Opens a window and clears it to red with wgpu.
+//! Opens a window and draws a grid of monospaced text with wgpu.
+
+mod game;
+mod grid;
+mod text;
 
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-const RED: wgpu::Color = wgpu::Color {
-  r: 1.0,
-  g: 0.0,
-  b: 0.0,
-  a: 1.0,
-};
+use game::Game;
+use grid::Grid;
+use text::TextRenderer;
 
 struct Gpu {
   window: Arc<Window>,
@@ -21,6 +22,8 @@ struct Gpu {
   device: wgpu::Device,
   queue: wgpu::Queue,
   config: wgpu::SurfaceConfiguration,
+  text: TextRenderer,
+  grid: Grid,
 }
 
 impl Gpu {
@@ -36,16 +39,29 @@ impl Gpu {
       .await
       .unwrap();
     let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-    let config = surface
+    let mut config = surface
       .get_default_config(&adapter, size.width.max(1), size.height.max(1))
       .unwrap();
+    // Grid colors are sRGB bytes, so the shader writes them to the surface unchanged.
+    let plain_format = config.format.remove_srgb_suffix();
+    if surface
+      .get_capabilities(&adapter)
+      .formats
+      .contains(&plain_format)
+    {
+      config.format = plain_format;
+    }
     surface.configure(&device, &config);
+    let text = TextRenderer::new(&device, &queue, config.format, window.scale_factor() as f32);
+    let (cols, rows) = text.grid_size(config.width, config.height);
     Self {
       window,
       surface,
       device,
       queue,
       config,
+      text,
+      grid: Grid::new(cols, rows),
     }
   }
 
@@ -54,11 +70,25 @@ impl Gpu {
       self.config.width = size.width;
       self.config.height = size.height;
       self.surface.configure(&self.device, &self.config);
-      self.window.request_redraw();
+      self.fit_grid();
     }
   }
 
-  fn render(&mut self) {
+  fn set_scale(&mut self, scale: f64) {
+    self.text.set_scale(&self.device, &self.queue, scale as f32);
+    self.fit_grid();
+  }
+
+  /// Resizes the grid to the cells that fit the surface, then schedules a redraw.
+  fn fit_grid(&mut self) {
+    let (cols, rows) = self.text.grid_size(self.config.width, self.config.height);
+    if (cols, rows) != (self.grid.cols(), self.grid.rows()) {
+      self.grid = Grid::new(cols, rows);
+    }
+    self.window.request_redraw();
+  }
+
+  fn render(&mut self, game: &Game) {
     let frame = match self.surface.get_current_texture() {
       wgpu::CurrentSurfaceTexture::Success(frame)
       | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -68,20 +98,25 @@ impl Gpu {
         return;
       }
     };
+    game.draw(&mut self.grid);
+    self.text.prepare(&self.device, &self.queue, &self.grid);
+
     let view = frame.texture.create_view(&Default::default());
     let mut encoder = self.device.create_command_encoder(&Default::default());
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
       color_attachments: &[Some(wgpu::RenderPassColorAttachment {
         view: &view,
         depth_slice: None,
         resolve_target: None,
         ops: wgpu::Operations {
-          load: wgpu::LoadOp::Clear(RED),
+          load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
           store: wgpu::StoreOp::Store,
         },
       })],
       ..Default::default()
     });
+    self.text.draw(&mut pass);
+    drop(pass);
     self.queue.submit([encoder.finish()]);
     self.queue.present(frame);
   }
@@ -90,6 +125,7 @@ impl Gpu {
 #[derive(Default)]
 struct App {
   gpu: Option<Gpu>,
+  game: Game,
 }
 
 impl ApplicationHandler for App {
@@ -108,7 +144,13 @@ impl ApplicationHandler for App {
     match event {
       WindowEvent::CloseRequested => event_loop.exit(),
       WindowEvent::Resized(size) => gpu.resize(size),
-      WindowEvent::RedrawRequested => gpu.render(),
+      WindowEvent::ScaleFactorChanged { scale_factor, .. } => gpu.set_scale(scale_factor),
+      WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+        if self.game.handle_key(&event.logical_key) {
+          gpu.window.request_redraw();
+        }
+      }
+      WindowEvent::RedrawRequested => gpu.render(&self.game),
       _ => {}
     }
   }
