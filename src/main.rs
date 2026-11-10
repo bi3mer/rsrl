@@ -1,162 +1,137 @@
-//! Opens a window and draws a grid of monospaced text with wgpu.
+use std::cmp::{max, min};
 
-mod game;
-mod grid;
-mod text;
+use rltk::{GameState, Rltk, VirtualKeyCode, RGB};
+use specs::prelude::*;
+use specs_derive::Component;
 
-use std::sync::Arc;
-
-use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{Window, WindowId};
-
-use game::Game;
-use grid::Grid;
-use text::TextRenderer;
-
-struct Gpu {
-  window: Arc<Window>,
-  surface: wgpu::Surface<'static>,
-  device: wgpu::Device,
-  queue: wgpu::Queue,
-  config: wgpu::SurfaceConfiguration,
-  text: TextRenderer,
-  grid: Grid,
+#[derive(Component, Debug)]
+struct Position {
+  x: i32,
+  y: i32,
 }
 
-impl Gpu {
-  async fn new(window: Arc<Window>) -> Self {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let size = window.inner_size();
-    let surface = instance.create_surface(window.clone()).unwrap();
-    let adapter = instance
-      .request_adapter(&wgpu::RequestAdapterOptions {
-        compatible_surface: Some(&surface),
-        ..Default::default()
-      })
-      .await
-      .unwrap();
-    let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-    let mut config = surface
-      .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-      .unwrap();
-    // Grid colors are sRGB bytes, so the shader writes them to the surface unchanged.
-    let plain_format = config.format.remove_srgb_suffix();
-    if surface
-      .get_capabilities(&adapter)
-      .formats
-      .contains(&plain_format)
-    {
-      config.format = plain_format;
-    }
-    surface.configure(&device, &config);
-    let text = TextRenderer::new(&device, &queue, config.format, window.scale_factor() as f32);
-    let (cols, rows) = text.grid_size(config.width, config.height);
-    Self {
-      window,
-      surface,
-      device,
-      queue,
-      config,
-      text,
-      grid: Grid::new(cols, rows),
-    }
-  }
+#[derive(Component)]
+struct Renderable {
+  glyph: rltk::FontCharType,
+  fg: RGB, // amateur hour RGB implementation
+  bg: RGB,
+}
 
-  fn resize(&mut self, size: PhysicalSize<u32>) {
-    if size.width > 0 && size.height > 0 {
-      self.config.width = size.width;
-      self.config.height = size.height;
-      self.surface.configure(&self.device, &self.config);
-      self.fit_grid();
-    }
-  }
+#[derive(Component)]
+struct LeftMover;
 
-  fn set_scale(&mut self, scale: f64) {
-    self.text.set_scale(&self.device, &self.queue, scale as f32);
-    self.fit_grid();
-  }
+// 'a is a lifetime. It can be any name, but the important point is that the
+// lifetime is for the duration of the run function. Once the run function is
+// complete, the storage is returned to World.
+impl<'a> System<'a> for LeftMover {
+  type SystemData = (ReadStorage<'a, LeftMover>, WriteStorage<'a, Position>);
 
-  /// Resizes the grid to the cells that fit the surface, then schedules a redraw.
-  fn fit_grid(&mut self) {
-    let (cols, rows) = self.text.grid_size(self.config.width, self.config.height);
-    if (cols, rows) != (self.grid.cols(), self.grid.rows()) {
-      self.grid = Grid::new(cols, rows);
-    }
-    self.window.request_redraw();
-  }
-
-  fn render(&mut self, game: &Game) {
-    let frame = match self.surface.get_current_texture() {
-      wgpu::CurrentSurfaceTexture::Success(frame)
-      | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-      wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
-      _ => {
-        self.surface.configure(&self.device, &self.config);
-        return;
+  fn run(&mut self, (lefty, mut pos): Self::SystemData) {
+    for (_lefty, pos) in (&lefty, &mut pos).join() {
+      pos.x -= 1;
+      if pos.x < 0 {
+        pos.x = 79;
       }
-    };
-    game.draw(&mut self.grid);
-    self.text.prepare(&self.device, &self.queue, &self.grid);
-
-    let view = frame.texture.create_view(&Default::default());
-    let mut encoder = self.device.create_command_encoder(&Default::default());
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-      color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-        view: &view,
-        depth_slice: None,
-        resolve_target: None,
-        ops: wgpu::Operations {
-          load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-          store: wgpu::StoreOp::Store,
-        },
-      })],
-      ..Default::default()
-    });
-    self.text.draw(&mut pass);
-    drop(pass);
-    self.queue.submit([encoder.finish()]);
-    self.queue.present(frame);
-  }
-}
-
-#[derive(Default)]
-struct App {
-  gpu: Option<Gpu>,
-  game: Game,
-}
-
-impl ApplicationHandler for App {
-  fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-    if self.gpu.is_none() {
-      let attributes = Window::default_attributes()
-        .with_title("rsrl")
-        .with_inner_size(LogicalSize::new(640, 400));
-      let window = Arc::new(event_loop.create_window(attributes).unwrap());
-      self.gpu = Some(pollster::block_on(Gpu::new(window)));
     }
   }
+}
 
-  fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-    let Some(gpu) = self.gpu.as_mut() else { return };
-    match event {
-      WindowEvent::CloseRequested => event_loop.exit(),
-      WindowEvent::Resized(size) => gpu.resize(size),
-      WindowEvent::ScaleFactorChanged { scale_factor, .. } => gpu.set_scale(scale_factor),
-      WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-        if self.game.handle_key(&event.logical_key) {
-          gpu.window.request_redraw();
-        }
-      }
-      WindowEvent::RedrawRequested => gpu.render(&self.game),
+#[derive(Component, Debug)]
+struct Player;
+
+fn try_move_player(delta_x: i32, delta_y: i32, ecs: &mut World) {
+  let mut positions = ecs.write_storage::<Position>();
+  let mut players = ecs.write_storage::<Player>();
+
+  for (_player, pos) in (&mut players, &mut positions).join() {
+    pos.x = min(79, max(0, pos.x + delta_x));
+    pos.y = min(49, max(0, pos.y + delta_y));
+  }
+}
+
+fn player_input(gs: &mut State, ctx: &mut Rltk) {
+  // Player movement
+  match ctx.key {
+    None => {} // Nothing happened
+    Some(key) => match key {
+      VirtualKeyCode::Left => try_move_player(-1, 0, &mut gs.ecs),
+      VirtualKeyCode::Right => try_move_player(1, 0, &mut gs.ecs),
+      VirtualKeyCode::Up => try_move_player(0, -1, &mut gs.ecs),
+      VirtualKeyCode::Down => try_move_player(0, 1, &mut gs.ecs),
       _ => {}
+    },
+  }
+}
+
+struct State {
+  ecs: World,
+}
+
+impl State {
+  fn run_systems(&mut self) {
+    LeftMover.run_now(&self.ecs);
+    self.ecs.maintain();
+  }
+}
+
+impl GameState for State {
+  fn tick(&mut self, ctx: &mut Rltk) {
+    //// Update
+    player_input(self, ctx);
+    self.run_systems();
+
+    //// Render
+    // clear screen
+    ctx.cls();
+
+    // get relevant info for rendering
+    let positions = self.ecs.read_storage::<Position>();
+    let renderables = self.ecs.read_storage::<Renderable>();
+
+    // this is a literal join, where it will only return entities with both
+    // a position and a renderable component
+    for (pos, render) in (&positions, &renderables).join() {
+      ctx.set(pos.x, pos.y, render.fg, render.bg, render.glyph);
     }
   }
 }
 
-fn main() {
-  let event_loop = EventLoop::new().unwrap();
-  event_loop.run_app(&mut App::default()).unwrap();
+fn main() -> rltk::BError {
+  let mut game_state = State { ecs: World::new() };
+  game_state.ecs.register::<Position>();
+  game_state.ecs.register::<Renderable>();
+  game_state.ecs.register::<LeftMover>();
+  game_state.ecs.register::<Player>();
+
+  game_state
+    .ecs
+    .create_entity()
+    .with(Player)
+    .with(Position { x: 40, y: 25 })
+    .with(Renderable {
+      glyph: rltk::to_cp437('@'),
+      fg: RGB::named(rltk::YELLOW),
+      bg: RGB::named(rltk::BLACK),
+    })
+    .build();
+
+  for i in 0..10 {
+    game_state
+      .ecs
+      .create_entity()
+      .with(LeftMover {})
+      .with(Position { x: i * 7, y: 20 })
+      .with(Renderable {
+        glyph: rltk::to_cp437('☺'),
+        fg: RGB::named(rltk::RED),
+        bg: RGB::named(rltk::BLACK),
+      })
+      .build();
+  }
+
+  let context = rltk::RltkBuilder::simple80x50()
+    .with_title("rsrl")
+    .build()?;
+
+  rltk::main_loop(context, game_state)
 }
