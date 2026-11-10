@@ -1,8 +1,16 @@
 use std::cmp::{max, min};
 
-use rltk::{GameState, Rltk, VirtualKeyCode, RGB};
+use raylib::prelude::*;
 use specs::prelude::*;
 use specs_derive::Component;
+
+mod rl;
+
+const COLS: i32 = 80;
+const ROWS: i32 = 50;
+const FONT_SIZE: i32 = 18;
+
+const FONT_TTF: &[u8] = include_bytes!("../assets/fonts/LiberationMono-Regular.ttf");
 
 #[derive(Component, Debug)]
 struct Position {
@@ -12,9 +20,9 @@ struct Position {
 
 #[derive(Component)]
 struct Renderable {
-  glyph: rltk::FontCharType,
-  fg: RGB, // amateur hour RGB implementation
-  bg: RGB,
+  glyph: char,
+  fg: Color,
+  bg: Color,
 }
 
 #[derive(Component)]
@@ -30,7 +38,7 @@ impl<'a> System<'a> for LeftMover {
     for (_lefty, pos) in (&lefty, &mut pos).join() {
       pos.x -= 1;
       if pos.x < 0 {
-        pos.x = 79;
+        pos.x = COLS - 1;
       }
     }
   }
@@ -44,22 +52,20 @@ fn try_move_player(delta_x: i32, delta_y: i32, ecs: &mut World) {
   let mut players = ecs.write_storage::<Player>();
 
   for (_player, pos) in (&mut players, &mut positions).join() {
-    pos.x = min(79, max(0, pos.x + delta_x));
-    pos.y = min(49, max(0, pos.y + delta_y));
+    pos.x = min(COLS - 1, max(0, pos.x + delta_x));
+    pos.y = min(ROWS - 1, max(0, pos.y + delta_y));
   }
 }
 
-fn player_input(gs: &mut State, ctx: &mut Rltk) {
-  // Player movement
-  match ctx.key {
-    None => {} // Nothing happened
-    Some(key) => match key {
-      VirtualKeyCode::Left => try_move_player(-1, 0, &mut gs.ecs),
-      VirtualKeyCode::Right => try_move_player(1, 0, &mut gs.ecs),
-      VirtualKeyCode::Up => try_move_player(0, -1, &mut gs.ecs),
-      VirtualKeyCode::Down => try_move_player(0, 1, &mut gs.ecs),
-      _ => {}
-    },
+fn player_input(gs: &mut State, rl: &RaylibHandle) {
+  if rl::pressed(rl, KeyboardKey::KEY_LEFT) {
+    try_move_player(-1, 0, &mut gs.ecs);
+  } else if rl::pressed(rl, KeyboardKey::KEY_RIGHT) {
+    try_move_player(1, 0, &mut gs.ecs);
+  } else if rl::pressed(rl, KeyboardKey::KEY_UP) {
+    try_move_player(0, -1, &mut gs.ecs);
+  } else if rl::pressed(rl, KeyboardKey::KEY_DOWN) {
+    try_move_player(0, 1, &mut gs.ecs);
   }
 }
 
@@ -74,29 +80,23 @@ impl State {
   }
 }
 
-impl GameState for State {
-  fn tick(&mut self, ctx: &mut Rltk) {
-    //// Update
-    player_input(self, ctx);
-    self.run_systems();
+fn main() {
+  // The window must exist before a font can load, so it opens at a placeholder
+  // size and is resized once the font is measured.
+  let (mut rl, thread) = raylib::init().size(640, 480).title("rsrl").build();
+  rl.set_target_fps(30);
 
-    //// Render
-    // clear screen
-    ctx.cls();
+  // raylib only rasterizes the glyphs you ask for, so list every character drawn.
+  let glyphs: String = (' '..='~').chain(['☺']).collect();
+  let font = rl
+    .load_font_from_memory(&thread, ".ttf", FONT_TTF, FONT_SIZE, Some(&glyphs))
+    .expect("load Liberation Mono");
 
-    // get relevant info for rendering
-    let positions = self.ecs.read_storage::<Position>();
-    let renderables = self.ecs.read_storage::<Renderable>();
+  let (cell_w, cell_h) = rl::cell_size(&font);
+  let (window_w, window_h) = (COLS * cell_w, ROWS * cell_h);
+  rl.set_window_size(window_w, window_h);
+  rl::center_window(&mut rl, window_w, window_h);
 
-    // this is a literal join, where it will only return entities with both
-    // a position and a renderable component
-    for (pos, render) in (&positions, &renderables).join() {
-      ctx.set(pos.x, pos.y, render.fg, render.bg, render.glyph);
-    }
-  }
-}
-
-fn main() -> rltk::BError {
   let mut game_state = State { ecs: World::new() };
   game_state.ecs.register::<Position>();
   game_state.ecs.register::<Renderable>();
@@ -109,9 +109,9 @@ fn main() -> rltk::BError {
     .with(Player)
     .with(Position { x: 40, y: 25 })
     .with(Renderable {
-      glyph: rltk::to_cp437('@'),
-      fg: RGB::named(rltk::YELLOW),
-      bg: RGB::named(rltk::BLACK),
+      glyph: '@',
+      fg: Color::YELLOW,
+      bg: Color::BLACK,
     })
     .build();
 
@@ -119,19 +119,38 @@ fn main() -> rltk::BError {
     game_state
       .ecs
       .create_entity()
-      .with(LeftMover {})
+      .with(LeftMover)
       .with(Position { x: i * 7, y: 20 })
       .with(Renderable {
-        glyph: rltk::to_cp437('☺'),
-        fg: RGB::named(rltk::RED),
-        bg: RGB::named(rltk::BLACK),
+        glyph: 'E',
+        fg: Color::new(255, 0, 0, 255),
+        bg: Color::BLACK,
       })
       .build();
   }
 
-  let context = rltk::RltkBuilder::simple80x50()
-    .with_title("rsrl")
-    .build()?;
+  while !rl.window_should_close() {
+    //// Update
+    player_input(&mut game_state, &rl);
+    game_state.run_systems();
 
-  rltk::main_loop(context, game_state)
+    //// Render
+    let mut d = rl.begin_drawing(&thread);
+    d.clear_background(Color::BLACK);
+
+    let positions = game_state.ecs.read_storage::<Position>();
+    let renderables = game_state.ecs.read_storage::<Renderable>();
+
+    for (pos, render) in (&positions, &renderables).join() {
+      let (x, y) = (pos.x * cell_w, pos.y * cell_h);
+      d.draw_rectangle(x, y, cell_w, cell_h, render.bg);
+      d.draw_text_codepoint(
+        &font,
+        render.glyph as i32,
+        Vector2::new(x as f32, y as f32),
+        FONT_SIZE as f32,
+        render.fg,
+      );
+    }
+  }
 }

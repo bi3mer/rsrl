@@ -4,11 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rltk = "0.8.7"
+raylib = "6.0.0"
 specs = { path = "vendor/specs" }
 specs-derive = { path = "vendor/specs-derive" }
 
-# bracket-terminal 0.8.7 panics with a u32 underflow when a tiling window manager
-# resizes the window. The vendored copy fixes src/hal/scaler.rs; see vendor/README.md.
-[patch.crates-io]
-bracket-terminal = { path = "vendor/bracket-terminal" }
