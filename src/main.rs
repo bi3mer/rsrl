@@ -1,6 +1,7 @@
 mod components;
 mod map;
 mod player;
+mod rect;
 mod systems;
 
 use components::*;
@@ -13,7 +14,7 @@ use specs::prelude::*;
 mod rl;
 
 const COLS: i32 = 80;
-const ROWS: i32 = 50;
+const ROWS: i32 = 40;
 const FONT_SIZE: i32 = 18;
 
 const FONT_TTF: &[u8] = include_bytes!("../assets/fonts/LiberationMono-Regular.ttf");
@@ -52,13 +53,19 @@ fn main() {
   game_state.ecs.register::<LeftMover>();
   game_state.ecs.register::<Player>();
 
-  game_state.ecs.insert(new_map());
+  // game_state.ecs.insert(new_random_map(400));
+  let (map, rooms) = new_map_rooms_and_corridors();
+  game_state.ecs.insert(map);
 
+  let (player_x, player_y) = rooms[0].center();
   game_state
     .ecs
     .create_entity()
     .with(Player)
-    .with(Position { x: 40, y: 25 })
+    .with(Position {
+      x: player_x,
+      y: player_y,
+    })
     .with(Renderable {
       glyph: '@',
       fg: Color::YELLOW,

@@ -8,13 +8,13 @@ use crate::map::{xy_to_idx, TileType};
 use crate::{rl, State, COLS, ROWS};
 
 pub fn player_input(gs: &mut State, rl: &RaylibHandle) {
-  if rl::pressed(rl, KeyboardKey::KEY_LEFT) {
+  if rl::pressed(rl, KeyboardKey::KEY_LEFT) || rl::pressed(rl, KeyboardKey::KEY_A) {
     try_move_player(-1, 0, &mut gs.ecs);
-  } else if rl::pressed(rl, KeyboardKey::KEY_RIGHT) {
+  } else if rl::pressed(rl, KeyboardKey::KEY_RIGHT) || rl::pressed(rl, KeyboardKey::KEY_D) {
     try_move_player(1, 0, &mut gs.ecs);
-  } else if rl::pressed(rl, KeyboardKey::KEY_UP) {
+  } else if rl::pressed(rl, KeyboardKey::KEY_UP) || rl::pressed(rl, KeyboardKey::KEY_W) {
     try_move_player(0, -1, &mut gs.ecs);
-  } else if rl::pressed(rl, KeyboardKey::KEY_DOWN) {
+  } else if rl::pressed(rl, KeyboardKey::KEY_DOWN) || rl::pressed(rl, KeyboardKey::KEY_S) {
     try_move_player(0, 1, &mut gs.ecs);
   }
 }

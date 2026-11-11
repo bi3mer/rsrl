@@ -1,20 +1,33 @@
-use std::ops::{Range, RangeInclusive};
+use std::ops::{Bound, Range, RangeBounds};
 
 pub struct RNG {
   state: u64,
 }
 
 // Generates `next_<type>` (any value of the type) and `range_<type>`, which
-// takes an inclusive range such as `rng.range_i32(1..=6)`. `$u` is the
-// unsigned type of the same width, used so the span max - min never overflows.
+// takes any range syntax: `rng.range_i32(1..=6)` includes 6, `rng.range_i32(1..6)`
+// excludes it, and an open end such as `5..` runs to the type's limit. `$u` is
+// the unsigned type of the same width, used so the span max - min never overflows.
 macro_rules! int_fns {
   ($next:ident, $range:ident, $t:ty, $u:ty) => {
     pub fn $next(&mut self) -> $t {
       self.next() as $t
     }
 
-    pub fn $range(&mut self, range: RangeInclusive<$t>) -> $t {
-      let (min, max) = range.into_inner();
+    pub fn $range(&mut self, range: impl RangeBounds<$t>) -> $t {
+      let min = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s + 1,
+        Bound::Unbounded => <$t>::MIN,
+      };
+      let max = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => {
+          debug_assert!(e > min, "empty range");
+          e - 1
+        }
+        Bound::Unbounded => <$t>::MAX,
+      };
       debug_assert!(max >= min);
       let span = max.wrapping_sub(min) as $u as u64;
       min.wrapping_add(self.below_inclusive(span) as $u as $t)
@@ -116,6 +129,29 @@ mod tests {
   }
 
   #[test]
+  fn half_open_int_range_excludes_end() {
+    let mut r = RNG::new(42);
+    let (mut lo, mut hi) = (i32::MAX, i32::MIN);
+    for _ in 0..DRAWS {
+      let v = r.range_i32(-3..5);
+      lo = lo.min(v);
+      hi = hi.max(v);
+    }
+    assert_eq!((lo, hi), (-3, 4));
+  }
+
+  #[test]
+  fn open_ended_int_ranges_reach_type_limits() {
+    let mut r = RNG::new(42);
+    let (mut lo, mut hi) = (u8::MAX, u8::MIN);
+    for _ in 0..DRAWS {
+      lo = lo.min(r.range_u8(..10));
+      hi = hi.max(r.range_u8(250..));
+    }
+    assert_eq!((lo, hi), (0, u8::MAX));
+  }
+
+  #[test]
   fn int_range_hits_both_ends() {
     let mut r = RNG::new(42);
     let (mut lo, mut hi) = (i8::MAX, i8::MIN);
@@ -170,5 +206,14 @@ mod tests {
     let mut r = RNG::new(42);
     #[allow(clippy::reversed_empty_ranges)]
     r.range_i32(5..=1);
+  }
+
+  #[test]
+  #[should_panic]
+  #[cfg(debug_assertions)]
+  fn empty_half_open_int_range_panics_in_debug() {
+    let mut r = RNG::new(42);
+    #[allow(clippy::reversed_empty_ranges)]
+    r.range_i32(3..3);
   }
 }
