@@ -4,6 +4,8 @@ use raylib::prelude::*;
 use specs::prelude::*;
 use specs_derive::Component;
 
+use rsrl::rng::RNG;
+
 mod rl;
 
 const COLS: i32 = 80;
@@ -11,6 +13,12 @@ const ROWS: i32 = 50;
 const FONT_SIZE: i32 = 18;
 
 const FONT_TTF: &[u8] = include_bytes!("../assets/fonts/LiberationMono-Regular.ttf");
+
+#[derive(PartialEq, Clone, Copy)]
+enum TileType {
+  Wall,
+  Floor,
+}
 
 #[derive(Component, Debug)]
 struct Position {
@@ -50,10 +58,19 @@ struct Player;
 fn try_move_player(delta_x: i32, delta_y: i32, ecs: &mut World) {
   let mut positions = ecs.write_storage::<Position>();
   let mut players = ecs.write_storage::<Player>();
+  let map = ecs.fetch::<Vec<TileType>>();
 
   for (_player, pos) in (&mut players, &mut positions).join() {
-    pos.x = min(COLS - 1, max(0, pos.x + delta_x));
-    pos.y = min(ROWS - 1, max(0, pos.y + delta_y));
+    let x = min(COLS - 1, max(0, pos.x + delta_x));
+    let y = min(ROWS - 1, max(0, pos.y + delta_y));
+    let dst_id = xy_to_idx(x, y);
+
+    debug_assert!(dst_id < map.len());
+
+    if map[dst_id] != TileType::Wall {
+      pos.x = x;
+      pos.y = y;
+    }
   }
 }
 
@@ -80,6 +97,63 @@ impl State {
   }
 }
 
+fn xy_to_idx(x: i32, y: i32) -> usize {
+  debug_assert!(x >= 0);
+  debug_assert!(y >= 0);
+
+  (y as usize * 80) + x as usize
+}
+
+fn new_map() -> Vec<TileType> {
+  let mut map = vec![TileType::Floor; (COLS * ROWS) as usize];
+
+  // make boundary walls
+  for x in 0..COLS {
+    map[xy_to_idx(x, 0)] = TileType::Wall;
+    map[xy_to_idx(x, ROWS - 1)] = TileType::Wall;
+  }
+
+  for y in 0..ROWS {
+    map[xy_to_idx(0, y)] = TileType::Wall;
+    map[xy_to_idx(COLS - 1, y)] = TileType::Wall;
+  }
+
+  // randomly place walls
+  let mut rng = RNG::new(42);
+  for _i in 0..400 {
+    let x = rng.range_i32(1..=COLS - 2);
+    let y = rng.range_i32(1..=ROWS - 2);
+    let id = xy_to_idx(x, y);
+
+    if id != xy_to_idx(40, 25) {
+      map[id] = TileType::Wall;
+    }
+  }
+
+  map
+}
+
+// The background is not drawn per tile: it is black, the same color the frame
+// is cleared to.
+fn draw_map(map: &[TileType], d: &mut impl RaylibDraw, font: &Font, cell_w: i32, cell_h: i32) {
+  for (idx, tile) in map.iter().enumerate() {
+    let (glyph, fg) = match tile {
+      TileType::Floor => ('.', Color::new(128, 128, 128, 255)),
+      TileType::Wall => ('#', Color::new(0, 255, 0, 255)),
+    };
+
+    let x = (idx as i32 % COLS) * cell_w;
+    let y = (idx as i32 / COLS) * cell_h;
+    d.draw_text_codepoint(
+      font,
+      glyph as i32,
+      Vector2::new(x as f32, y as f32),
+      FONT_SIZE as f32,
+      fg,
+    );
+  }
+}
+
 fn main() {
   // The window must exist before a font can load, so it opens at a placeholder
   // size and is resized once the font is measured.
@@ -102,6 +176,8 @@ fn main() {
   game_state.ecs.register::<Renderable>();
   game_state.ecs.register::<LeftMover>();
   game_state.ecs.register::<Player>();
+
+  game_state.ecs.insert(new_map());
 
   game_state
     .ecs
@@ -137,6 +213,9 @@ fn main() {
     //// Render
     let mut d = rl.begin_drawing(&thread);
     d.clear_background(Color::BLACK);
+
+    let map = game_state.ecs.fetch::<Vec<TileType>>();
+    draw_map(&map, &mut d, &font, cell_w, cell_h);
 
     let positions = game_state.ecs.read_storage::<Position>();
     let renderables = game_state.ecs.read_storage::<Renderable>();
