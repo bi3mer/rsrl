@@ -12,6 +12,8 @@ use player::*;
 use raylib::prelude::*;
 use specs::prelude::*;
 
+use crate::systems::VisibilitySystem;
+
 mod rl;
 
 const COLS: i32 = 80;
@@ -27,6 +29,10 @@ struct State {
 impl State {
   fn run_systems(&mut self) {
     components::LeftMover.run_now(&self.ecs);
+
+    let mut vis = VisibilitySystem {};
+    vis.run_now(&self.ecs);
+
     self.ecs.maintain();
   }
 }
@@ -53,6 +59,7 @@ fn main() {
   game_state.ecs.register::<Renderable>();
   game_state.ecs.register::<LeftMover>();
   game_state.ecs.register::<Player>();
+  game_state.ecs.register::<Viewshed>();
 
   // game_state.ecs.insert(new_random_map(400));
   let map = Map::new_map_rooms_and_corridors();
@@ -69,6 +76,10 @@ fn main() {
       glyph: '@',
       fg: Color::YELLOW,
       bg: Color::BLACK,
+    })
+    .with(Viewshed {
+      visible_tiles: Vec::new(),
+      range: 8,
     })
     .build();
 
