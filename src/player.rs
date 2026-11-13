@@ -4,7 +4,7 @@ use raylib::prelude::*;
 use specs::prelude::*;
 
 use crate::components::*;
-use crate::map::{xy_to_idx, TileType};
+use crate::map::{Map, TileType};
 use crate::{rl, State, COLS, ROWS};
 
 pub fn player_input(gs: &mut State, rl: &RaylibHandle) {
@@ -22,16 +22,16 @@ pub fn player_input(gs: &mut State, rl: &RaylibHandle) {
 pub fn try_move_player(delta_x: i32, delta_y: i32, ecs: &mut World) {
   let mut positions = ecs.write_storage::<Position>();
   let mut players = ecs.write_storage::<Player>();
-  let map = ecs.fetch::<Vec<TileType>>();
+  let map = ecs.fetch::<Map>();
 
   for (_player, pos) in (&mut players, &mut positions).join() {
     let x = min(COLS - 1, max(0, pos.x + delta_x));
     let y = min(ROWS - 1, max(0, pos.y + delta_y));
-    let dst_id = xy_to_idx(x, y);
+    let dst_id = map.xy_to_idx(x, y);
 
-    debug_assert!(dst_id < map.len());
+    debug_assert!(dst_id < map.tiles.len());
 
-    if map[dst_id] != TileType::Wall {
+    if map.tiles[dst_id] != TileType::Wall {
       pos.x = x;
       pos.y = y;
     }

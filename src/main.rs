@@ -1,6 +1,7 @@
 mod components;
 mod map;
 mod player;
+mod point;
 mod rect;
 mod systems;
 
@@ -54,10 +55,8 @@ fn main() {
   game_state.ecs.register::<Player>();
 
   // game_state.ecs.insert(new_random_map(400));
-  let (map, rooms) = new_map_rooms_and_corridors();
-  game_state.ecs.insert(map);
-
-  let (player_x, player_y) = rooms[0].center();
+  let map = Map::new_map_rooms_and_corridors();
+  let (player_x, player_y) = map.rooms[0].center();
   game_state
     .ecs
     .create_entity()
@@ -87,6 +86,8 @@ fn main() {
       .build();
   }
 
+  game_state.ecs.insert(map);
+
   while !rl.window_should_close() {
     //// Update
     player_input(&mut game_state, &rl);
@@ -96,8 +97,8 @@ fn main() {
     let mut d = rl.begin_drawing(&thread);
     d.clear_background(Color::BLACK);
 
-    let map = game_state.ecs.fetch::<Vec<TileType>>();
-    draw_map(&map, &mut d, &font, cell_w, cell_h);
+    let map = game_state.ecs.fetch::<Map>();
+    map.draw_map(&mut d, &font, cell_w, cell_h);
 
     let positions = game_state.ecs.read_storage::<Position>();
     let renderables = game_state.ecs.read_storage::<Renderable>();
